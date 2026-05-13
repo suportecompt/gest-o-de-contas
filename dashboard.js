@@ -9,7 +9,6 @@ let montoLineaActual = 0;
 document.addEventListener('DOMContentLoaded', () => {
     initDashboard();
     cargarDatosBancarios();
-    // Crear el contenedor de toasts automáticamente si no existe
     if (!document.getElementById('toast-container')) {
         const container = document.createElement('div');
         container.id = 'toast-container';
@@ -35,9 +34,8 @@ function showToast(message, type = 'success') {
     container.appendChild(toast);
     if (typeof lucide !== 'undefined') lucide.createIcons();
 
-    // Desaparece después de 3 segundos
     setTimeout(() => {
-        toast.style.animation = 'fadeOut 0.5s ease-in forwards';
+        toast.style.animation = 'toastOut 0.5s ease-in forwards';
         setTimeout(() => toast.remove(), 500);
     }, 3000);
 }
@@ -69,12 +67,8 @@ function initDashboard() {
     document.getElementById('btn-limpar-filtro').addEventListener('click', () => {
         document.getElementById('filter-ano').value = '';
         document.getElementById('filter-mes').value = '';
-        const filterDesc = document.getElementById('filter-desc');
-        if (filterDesc) filterDesc.value = '';
-        
-        // LIMPIAR FILTRO DE ESTADO
-        const filterEstado = document.getElementById('filter-estado');
-        if (filterEstado) filterEstado.value = '';
+        if (document.getElementById('filter-desc')) document.getElementById('filter-desc').value = '';
+        if (document.getElementById('filter-estado')) document.getElementById('filter-estado').value = '';
         
         currentPage = 0; cargarDatosBancarios();
         showToast("Filtros limpos", "info");
@@ -91,16 +85,13 @@ async function cargarDatosBancarios() {
     const pageInfo = document.getElementById('page-info');
     const offset = currentPage * pageSize;
     
-    // Captura de filtros
     const ano = document.getElementById('filter-ano').value;
     const mes = document.getElementById('filter-mes').value;
     const desc = document.getElementById('filter-desc') ? document.getElementById('filter-desc').value.trim() : '';
-    // NUEVO: Captura de filtro de estado
     const estadoFiltro = document.getElementById('filter-estado') ? document.getElementById('filter-estado').value : '';
 
     let extraFilters = '';
     
-    // Filtro de Fecha
     if (ano) {
         if (mes) {
             const mesStr = mes.padStart(2, '0');
@@ -111,10 +102,7 @@ async function cargarDatosBancarios() {
         }
     }
 
-    // NUEVO: Filtro por Descrição
-    if (desc) {
-        extraFilters += `&descricao=ilike.*${desc}*`;
-    }
+    if (desc) extraFilters += `&descricao=ilike.*${desc}*`;
 
     tbody.innerHTML = `<tr><td colspan="7" class="px-6 py-12 text-center text-slate-400">Carregando...</td></tr>`;
 
@@ -133,7 +121,6 @@ async function cargarDatosBancarios() {
         allDocs.forEach(d => docsMap[d.id] = parseFloat(d.gross_total || 0));
 
         if (response.ok) {
-            // APLICAR FILTRO DE ESTADO (Client-side)
             if (estadoFiltro) {
                 data = data.filter(item => {
                     const montanteVal = parseFloat(item.montante) || 0;
@@ -143,9 +130,10 @@ async function cargarDatosBancarios() {
                     const diff = Math.abs(Math.abs(montanteVal) - sumaDocs);
                     const isValido = associatedIds.length > 0 && diff < 0.01;
 
+                    // Lógica corregida: solo Pendente y Correcto
                     if (estadoFiltro === 'pendente') return associatedIds.length === 0;
                     if (estadoFiltro === 'correcto') return isValido;
-                    if (estadoFiltro === 'incorrecto') return associatedIds.length > 0 && !isValido;
+                    
                     return true;
                 });
             }
@@ -190,13 +178,11 @@ async function cargarDatosBancarios() {
     } catch (error) {
         console.error(error);
         showToast("Erro ao carregar dados", "error");
-        tbody.innerHTML = `<tr><td colspan="7" class="px-6 py-10 text-center text-red-500">Erro ao carregar datos.</td></tr>`;
     }
 }
 
-// ==========================================
-// 2. BUSCADOR DINÁMICO (TYPEAHEAD)
-// ==========================================
+// ... El resto del archivo se mantiene igual ...
+
 window.buscarDocumentosEnTiempoReal = async function(query) {
     if (query.length < 2) return; 
     const datalist = document.getElementById('docs-datalist');
@@ -214,14 +200,9 @@ window.buscarDocumentosEnTiempoReal = async function(query) {
             option.textContent = `${doc.gross_total}€ | ${doc.contribuinte1 || 'S/N'}`;
             datalist.appendChild(option);
         });
-    } catch (e) {
-        console.error("Error en búsqueda:", e);
-    }
+    } catch (e) { console.error(e); }
 };
 
-// ==========================================
-// 3. GESTIÓN DEL FORMULARIO Y DETALLES
-// ==========================================
 window.verDetalleByIndex = async function(index) {
     const item = currentData[index];
     if (!item) return;
@@ -256,14 +237,12 @@ function renderFormulario(item) {
     
     container.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
-            
             <div class="md:col-span-4 bg-slate-50 rounded-xl p-4 border border-slate-100 flex flex-col gap-3 h-full justify-between">
                 <div>
                     <div class="flex items-center gap-2 border-b border-slate-200 pb-2 mb-4">
                         <i data-lucide="info" class="w-4 h-4 text-blue-500"></i>
                         <h3 class="text-[10px] font-black text-slate-700 uppercase tracking-wider">Registo Bancário</h3>
                     </div>
-                    
                     <div class="space-y-4 text-xs">
                         <div>
                             <p class="text-[8px] font-bold text-slate-400 uppercase mb-1">Data Valor</p>
@@ -279,13 +258,8 @@ function renderFormulario(item) {
                             <p class="text-[8px] font-bold text-slate-400 uppercase mb-1">Descrição</p>
                             <b class="text-slate-600 block leading-tight">${item.descricao || ''}</b>
                         </div>
-                        <div>
-                            <p class="text-[8px] font-bold text-slate-400 uppercase mb-1">Notas</p>
-                            <b class="italic text-slate-500 block leading-tight">${item.notas || '---'}</b>
-                        </div>
                     </div>
                 </div>
-
                 <div class="pt-2 border-t border-slate-200 mt-4">
                     <p class="text-[8px] font-bold text-slate-400 uppercase mb-1">ID Interno</p>
                     <b class="text-slate-400 font-mono text-[9px]">#${item.id_interno}</b>
@@ -293,13 +267,11 @@ function renderFormulario(item) {
             </div>
 
             <div class="md:col-span-8 flex flex-col gap-4">
-                
                 <div class="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-sm">
                     <div class="bg-slate-50 px-3 py-1.5 border-b border-slate-200 flex justify-between items-center">
                         <span class="text-[9px] font-bold text-slate-500 uppercase">Documentos Selecionados</span>
                     </div>
-                    <div id="lista-asociados" class="p-3 overflow-y-auto space-y-2 h-52 bg-white" style="scrollbar-width: thin;">
-                        </div>
+                    <div id="lista-asociados" class="p-3 overflow-y-auto space-y-2 h-52 bg-white" style="scrollbar-width: thin;"></div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
@@ -322,7 +294,8 @@ function renderFormulario(item) {
 
         <div class="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-100">
             <button onclick="cancelarEdicion()" class="px-4 py-2 text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors">Cancelar</button>
-            <button onclick="guardarAsociacion(${item.id_interno})" class="px-8 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black rounded-lg flex items-center gap-2 shadow-lg transition-all">
+            <button id="btn-gravar-asociacion" onclick="intentarGuardar(${item.id_interno})" 
+                class="px-8 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black rounded-lg flex items-center gap-2 shadow-lg transition-all opacity-50 cursor-not-allowed">
                 <i data-lucide="save" class="w-4 h-4"></i> GRAVAR
             </button>
         </div>
@@ -330,7 +303,7 @@ function renderFormulario(item) {
 
     actualizarListaVisual();
     lucide.createIcons();
-    document.getElementById('form-container').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 window.agregarDocumentoDesdeInput = async function() {
@@ -383,10 +356,26 @@ function actualizarListaVisual() {
 
 function actualizarIndicadorSuma(suma) {
     const contenedorSuma = document.getElementById('indicador-reconciliacion');
+    const btnGravar = document.getElementById('btn-gravar-asociacion');
     if (!contenedorSuma) return;
+
     const diff = Math.abs(Math.abs(montoLineaActual) - suma);
     const coinciden = diff < 0.01;
-    if (suma === 0) { contenedorSuma.innerHTML = ''; return; }
+
+    if (btnGravar) {
+        if (coinciden && documentosSeleccionados.length > 0) {
+            btnGravar.classList.remove('opacity-50', 'cursor-not-allowed');
+            btnGravar.classList.add('opacity-100', 'cursor-pointer');
+        } else {
+            btnGravar.classList.add('opacity-50', 'cursor-not-allowed');
+            btnGravar.classList.remove('opacity-100', 'cursor-pointer');
+        }
+    }
+
+    if (suma === 0) { 
+        contenedorSuma.innerHTML = ''; 
+        return; 
+    }
 
     contenedorSuma.innerHTML = `
         <div class="w-full flex items-center justify-between p-2.5 rounded-lg border ${coinciden ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}">
@@ -394,11 +383,31 @@ function actualizarIndicadorSuma(suma) {
                 <p class="text-[8px] font-bold uppercase ${coinciden ? 'text-emerald-700' : 'text-amber-700'}">Soma Selecionada</p>
                 <p class="text-xs font-black ${coinciden ? 'text-emerald-600' : 'text-amber-600'}">${suma.toFixed(2)}€</p>
             </div>
-            <p class="text-[9px] font-black ${coinciden ? 'text-emerald-600' : 'text-amber-600'}">${coinciden ? 'CONCILIADO' : 'PENDENTE'}</p>
+            <p class="text-[9px] font-black ${coinciden ? 'text-emerald-600' : 'text-amber-600'}">
+                ${coinciden ? '✅ COINCIDE' : '⚠️ DIFERENÇA: ' + diff.toFixed(2) + '€'}
+            </p>
         </div>
     `;
     lucide.createIcons();
 }
+
+window.intentarGuardar = function(id_interno) {
+    const sumaTotalDocs = documentosSeleccionados.reduce((acc, doc) => acc + (parseFloat(doc.total) || 0), 0);
+    const diff = Math.abs(Math.abs(montoLineaActual) - sumaTotalDocs);
+    const coinciden = diff < 0.01;
+
+    if (documentosSeleccionados.length === 0) {
+        showToast("Selecione pelo menos um documento.", "info");
+        return;
+    }
+
+    if (!coinciden) {
+        showToast("O valor total deve ser exactamente igual ao montante bancário.", "error");
+        return;
+    }
+
+    guardarAsociacion(id_interno);
+};
 
 window.guardarAsociacion = async function(id_interno) {
     try {
