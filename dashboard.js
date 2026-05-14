@@ -4,6 +4,7 @@ const pageSize = 20;
 let currentData = []; 
 let documentosSeleccionados = []; 
 let montoLineaActual = 0; 
+let fechaFilaActual = ""; // NUEVA: Para filtrar documentos por fecha
 
 // Inicialización
 document.addEventListener('DOMContentLoaded', () => {
@@ -130,7 +131,6 @@ async function cargarDatosBancarios() {
                     const diff = Math.abs(Math.abs(montanteVal) - sumaDocs);
                     const isValido = associatedIds.length > 0 && diff < 0.01;
 
-                    // Lógica corregida: solo Pendente y Correcto
                     if (estadoFiltro === 'pendente') return associatedIds.length === 0;
                     if (estadoFiltro === 'correcto') return isValido;
                     
@@ -177,19 +177,26 @@ async function cargarDatosBancarios() {
         }
     } catch (error) {
         console.error(error);
-        showToast("Erro ao carregar dados", "error");
+        showToast("Erro ao carregar datos", "error");
     }
 }
 
-// ... El resto del archivo se mantiene igual ...
-
+// ==========================================
+// 2. BUSCAR DOCUMENTOS (FILTRO POR FECHA)
+// ==========================================
 window.buscarDocumentosEnTiempoReal = async function(query) {
     if (query.length < 2) return; 
     const datalist = document.getElementById('docs-datalist');
     const endpointDocs = window.AppConfig.ENDPOINTS.DOCUMENTS || '/rest/v1/documents';
     
     try {
-        const url = `${window.AppConfig.SUPABASE_URL}${endpointDocs}?select=id,gross_total,contribuinte1&id=ilike.*${query}*&limit=10`;
+        // CORRECCIÓN: Filtramos por ID y por fecha mayor o igual a la de la línea bancaria
+        let url = `${window.AppConfig.SUPABASE_URL}${endpointDocs}?select=id,gross_total,contribuinte1&id=ilike.*${query}*&limit=10`;
+        
+        if (fechaFilaActual) {
+            url += `&date=gte.${fechaFilaActual}`;
+        }
+
         const response = await fetch(url, { headers: { 'apikey': window.AppConfig.SUPABASE_ANON_KEY } });
         const docs = await response.json();
 
@@ -203,11 +210,16 @@ window.buscarDocumentosEnTiempoReal = async function(query) {
     } catch (e) { console.error(e); }
 };
 
+// ==========================================
+// 3. SELECCIÓN DE FILA Y RENDERIZADO
+// ==========================================
 window.verDetalleByIndex = async function(index) {
     const item = currentData[index];
     if (!item) return;
 
     montoLineaActual = parseFloat(item.montante || 0);
+    fechaFilaActual = item.data_valor || ""; // GUARDAMOS LA FECHA DE LA FILA
+
     let idsExistentes = Array.isArray(item.associated_documents) ? item.associated_documents : [];
     
     const container = document.getElementById('form-container');
@@ -432,6 +444,7 @@ window.guardarAsociacion = async function(id_interno) {
 };
 
 window.cancelarEdicion = function() {
+    fechaFilaActual = ""; // RESET DE FECHA
     const container = document.getElementById('form-container');
     container.className = "border-2 border-dashed border-gray-50 rounded-xl min-h-[80px] flex items-center justify-center text-gray-300";
     container.innerHTML = '<p class="text-[10px] font-bold uppercase italic">Selecione um registo</p>';
