@@ -4,7 +4,7 @@ const pageSize = 20;
 let currentData = []; 
 let documentosSeleccionados = []; 
 let montoLineaActual = 0; 
-let fechaFilaActual = ""; // NUEVA: Para filtrar documentos por fecha
+let fechaFilaActual = ""; 
 
 // Inicialización
 document.addEventListener('DOMContentLoaded', () => {
@@ -79,7 +79,7 @@ function initDashboard() {
 }
 
 // ==========================================
-// 1. CARGAR DATOS BANCARIOS (TABLA)
+// 1. CARGAR DATOS BANCARIOS (CON FILTRO FLEXIBLE)
 // ==========================================
 async function cargarDatosBancarios() {
     const tbody = document.getElementById('table-body');
@@ -93,15 +93,29 @@ async function cargarDatosBancarios() {
 
     let extraFilters = '';
     
-    if (ano) {
-        if (mes) {
-            const mesStr = mes.padStart(2, '0');
-            const ultimoDia = new Date(ano, mes, 0).getDate();
-            extraFilters += `&data_valor=gte.${ano}-${mesStr}-01&data_valor=lte.${ano}-${mesStr}-${ultimoDia}`;
-        } else {
-            extraFilters += `&data_valor=gte.${ano}-01-01&data_valor=lte.${ano}-12-31`;
-        }
-    }
+    // --- LÓGICA DE FECHA CORREGIDA Y COMPATIBLE ---
+if (ano && mes) {
+    // Caso 1: Año y Mes (Rango exacto)
+    const mesStr = mes.padStart(2, '0');
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    extraFilters += `&data_valor=gte.${ano}-${mesStr}-01&data_valor=lte.${ano}-${mesStr}-${ultimoDia}`;
+} else if (ano) {
+    // Caso 2: Solo Año (Rango anual)
+    extraFilters += `&data_valor=gte.${ano}-01-01&data_valor=lte.${ano}-12-31`;
+} else if (mes) {
+    // Caso 3: Solo Mes (Cualquier año)
+    // Para evitar el 404/Error de tipo, usamos 'cd' (contained by) o 
+    // preferiblemente buscamos en el año actual para evitar errores de casting de PostgREST
+    const añoActual = new Date().getFullYear();
+    const mesStr = mes.padStart(2, '0');
+    const ultimoDia = new Date(añoActual, mes, 0).getDate();
+    
+    // Si realmente necesitas de TODOS los años, la columna debe ser casteada en Supabase 
+    // pero como no podemos tocar la DB, limitamos al año actual o usamos:
+    extraFilters += `&data_valor=gte.${añoActual}-${mesStr}-01&data_valor=lte.${añoActual}-${mesStr}-${ultimoDia}`;
+    
+    console.warn("Filtrando mes " + mesStr + " para o ano atual (" + añoActual + ")");
+}
 
     if (desc) extraFilters += `&descricao=ilike.*${desc}*`;
 
@@ -114,14 +128,18 @@ async function cargarDatosBancarios() {
         });
         let data = await response.json();
 
+        // Obtener documentos para el mapeo de estados (validación de sumas)
         const resDocs = await fetch(`${window.AppConfig.SUPABASE_URL}${window.AppConfig.ENDPOINTS.DOCUMENTS}?select=id,gross_total`, {
             headers: { 'apikey': window.AppConfig.SUPABASE_ANON_KEY }
         });
         const allDocs = await resDocs.json();
         const docsMap = {};
-        allDocs.forEach(d => docsMap[d.id] = parseFloat(d.gross_total || 0));
+        if (Array.isArray(allDocs)) {
+            allDocs.forEach(d => docsMap[d.id] = parseFloat(d.gross_total || 0));
+        }
 
         if (response.ok) {
+            // Filtro local por estado (Pendiente / Correcto)
             if (estadoFiltro) {
                 data = data.filter(item => {
                     const montanteVal = parseFloat(item.montante) || 0;
@@ -133,7 +151,6 @@ async function cargarDatosBancarios() {
 
                     if (estadoFiltro === 'pendente') return associatedIds.length === 0;
                     if (estadoFiltro === 'correcto') return isValido;
-                    
                     return true;
                 });
             }
@@ -182,7 +199,7 @@ async function cargarDatosBancarios() {
 }
 
 // ==========================================
-// 2. BUSCAR DOCUMENTOS (FILTRO POR FECHA)
+// 2. BUSCAR DOCUMENTOS (CORREGIDO TIPOS DATOS)
 // ==========================================
 window.buscarDocumentosEnTiempoReal = async function(query) {
     if (query.length < 2) return; 
@@ -190,35 +207,51 @@ window.buscarDocumentosEnTiempoReal = async function(query) {
     const endpointDocs = window.AppConfig.ENDPOINTS.DOCUMENTS || '/rest/v1/documents';
     
     try {
-        // CORRECCIÓN: Filtramos por ID y por fecha mayor o igual a la de la línea bancaria
-        let url = `${window.AppConfig.SUPABASE_URL}${endpointDocs}?select=id,gross_total,contribuinte1&id=ilike.*${query}*&limit=10`;
+        let orFilters = [];
+        orFilters.push(`id.ilike.*${query}*`);
+
+        const numQuery = query.replace(',', '.');
+        if (!isNaN(numQuery) && numQuery.trim() !== "") {
+            orFilters.push(`gross_total.eq.${numQuery}`);
+        }
+
+        let url = `${window.AppConfig.SUPABASE_URL}${endpointDocs}?select=id,gross_total,contribuinte1&or=(${orFilters.join(',')})&limit=10`;
         
+        // El campo en documentos se llama 'date', usamos gte basado en la fecha de la fila bancaria
         if (fechaFilaActual) {
             url += `&date=gte.${fechaFilaActual}`;
         }
 
-        const response = await fetch(url, { headers: { 'apikey': window.AppConfig.SUPABASE_ANON_KEY } });
+        const response = await fetch(url, { 
+            headers: { 'apikey': window.AppConfig.SUPABASE_ANON_KEY } 
+        });
+
+        if (!response.ok) return;
+
         const docs = await response.json();
+        if (!Array.isArray(docs)) return;
 
         datalist.innerHTML = ''; 
         docs.forEach(doc => {
             const option = document.createElement('option');
-            option.value = doc.id;
-            option.textContent = `${doc.gross_total}€ | ${doc.contribuinte1 || 'S/N'}`;
+            option.value = doc.id; 
+            option.textContent = `${parseFloat(doc.gross_total).toFixed(2)}€ | ID: ${doc.id} | ${doc.contribuinte1 || 'S/N'}`;
             datalist.appendChild(option);
         });
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+        console.error(e); 
+    }
 };
 
 // ==========================================
-// 3. SELECCIÓN DE FILA Y RENDERIZADO
+// 3. LÓGICA DE FORMULARIO Y GUARDADO
 // ==========================================
 window.verDetalleByIndex = async function(index) {
     const item = currentData[index];
     if (!item) return;
 
     montoLineaActual = parseFloat(item.montante || 0);
-    fechaFilaActual = item.data_valor || ""; // GUARDAMOS LA FECHA DE LA FILA
+    fechaFilaActual = item.data_valor || ""; 
 
     let idsExistentes = Array.isArray(item.associated_documents) ? item.associated_documents : [];
     
@@ -232,7 +265,7 @@ window.verDetalleByIndex = async function(index) {
                 headers: { 'apikey': window.AppConfig.SUPABASE_ANON_KEY }
             });
             const docsDetails = await res.json();
-            documentosSeleccionados = docsDetails.map(d => ({ id: d.id, total: d.gross_total }));
+            documentosSeleccionados = Array.isArray(docsDetails) ? docsDetails.map(d => ({ id: d.id, total: d.gross_total })) : [];
         } else {
             documentosSeleccionados = [];
         }
@@ -444,7 +477,7 @@ window.guardarAsociacion = async function(id_interno) {
 };
 
 window.cancelarEdicion = function() {
-    fechaFilaActual = ""; // RESET DE FECHA
+    fechaFilaActual = ""; 
     const container = document.getElementById('form-container');
     container.className = "border-2 border-dashed border-gray-50 rounded-xl min-h-[80px] flex items-center justify-center text-gray-300";
     container.innerHTML = '<p class="text-[10px] font-bold uppercase italic">Selecione um registo</p>';
