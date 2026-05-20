@@ -2,6 +2,7 @@
 // MÓDULO: dashboard-form.js (Versão Popup)
 // Gestión del Modal de Conciliación y Guardado
 // ESTRUCTURA DE DATOS UNIFICADA: id, gross_total, date, contribuinte2, empresa
+// Modificado: Soporte de guardado tolerante (Margen 5€) exclusivo para PayPal Europe
 // ==========================================
 
 // Función auxiliar interna para buscar el nombre de la empresa usando contribuinte2
@@ -25,6 +26,8 @@ window.verDetalleByIndex = async function(index) {
     const item = window.currentData[index];
     if (!item) return;
 
+    // Guardamos la línea completa en el entorno global para verificar su descripción en tiempo real
+    window.movimientoBancarioSeleccionado = item;
     window.montoLineaActual = parseFloat(item.montante || 0);
     window.fechaFilaActual = item.data_valor || ""; 
 
@@ -37,7 +40,6 @@ window.verDetalleByIndex = async function(index) {
     try {
         let idsExistentes = Array.isArray(item.associated_documents) ? item.associated_documents : [];
         if (idsExistentes.length > 0) {
-            // CORRECCIÓN URL SUPABASE: Los elementos de un filtro 'in' se envuelven limpios separados por comas
             const idList = idsExistentes.map(id => encodeURIComponent(id.trim())).join(',');
             
             const url = `${window.AppConfig.SUPABASE_URL}${window.AppConfig.ENDPOINTS.DOCUMENTS}?id=in.(${idList})&select=id,gross_total,date,contribuinte2`;
@@ -172,7 +174,6 @@ window.agregarDocumentoDesdeInput = async function() {
         if (data && data.length > 0) {
             const nombreEmpresa = await obtenerNombreEmpresa(data[0].contribuinte2);
             
-            // Sincronizado a claves nativas
             window.documentosSeleccionados.push({ 
                 id: data[0].id || "", 
                 gross_total: data[0].gross_total ?? 0,
@@ -208,7 +209,6 @@ window.actualizarListaVisual = function() {
         return;
     }
     
-    // CORRECCIÓN: Leemos 'doc.gross_total' de forma uniforme
     const sumaTotalDocs = window.documentosSeleccionados.reduce((acc, doc) => acc + (parseFloat(doc.gross_total) || 0), 0);
     
     lista.innerHTML = window.documentosSeleccionados.map(doc => {
@@ -244,11 +244,74 @@ function actualizarIndicadorSuma(suma) {
     const btnGravar = document.getElementById('btn-gravar-asociacion');
     if (!contenedorSuma) return;
 
-    const diff = Math.abs(Math.abs(window.montoLineaActual) - suma);
-    const coinciden = diff < 0.01;
+    const valorBanco = Math.abs(window.montoLineaActual);
+    const diffRaw = valorBanco - suma;
+    const diff = parseFloat(diffRaw.toFixed(2)); // Evitamos imprecisiones de JavaScript (0.00000001)
 
+    // Evaluar si es una transacción de PayPal Europe
+    const esPayPal = window.movimientoBancarioSeleccionado && 
+                     window.movimientoBancarioSeleccionado.descricao && 
+                     window.movimientoBancarioSeleccionado.descricao.toUpperCase().includes("PAYPAL EUROPE");
+
+    let esValidoParaGuardar = false;
+    let mensajeHtml = "";
+
+    if (esPayPal) {
+        // Regla especial PayPal: Margen de 5€ hacia abajo permitido
+        if (diff >= 0 && diff <= 5.00) {
+            esValidoParaGuardar = true;
+            mensajeHtml = `
+                <div class="w-full flex items-center justify-between p-2.5 rounded-lg border bg-emerald-50 border-emerald-200">
+                    <div>
+                        <p class="text-[8px] font-bold uppercase text-emerald-700">Soma Selecionada (PayPal)</p>
+                        <p class="text-xs font-black text-emerald-600">${suma.toFixed(2)}€</p>
+                    </div>
+                    <p class="text-[9px] font-black text-emerald-600">
+                        ✅ MARGEM ACEITÁVEL (-${diff.toFixed(2)}€)
+                    </p>
+                </div>`;
+        } else {
+            esValidoParaGuardar = false;
+            mensajeHtml = `
+                <div class="w-full flex items-center justify-between p-2.5 rounded-lg border bg-amber-50 border-amber-200">
+                    <div>
+                        <p class="text-[8px] font-bold uppercase text-amber-700">Soma Selecionada (PayPal)</p>
+                        <p class="text-xs font-black text-amber-600">${suma.toFixed(2)}€</p>
+                    </div>
+                    <p class="text-[9px] font-black text-red-600 font-bold">
+                        ⚠️ EXCEDE OS 5.00€ DE MARGEM
+                    </p>
+                </div>`;
+        }
+    } else {
+        // Regla Estándar: Cuadre exacto obligatorio
+        const coincidenExacto = Math.abs(diff) < 0.01;
+        if (coincidenExacto) {
+            esValidoParaGuardar = true;
+            mensajeHtml = `
+                <div class="w-full flex items-center justify-between p-2.5 rounded-lg border bg-emerald-50 border-emerald-200">
+                    <div>
+                        <p class="text-[8px] font-bold uppercase text-emerald-700">Soma Selecionada</p>
+                        <p class="text-xs font-black text-emerald-600">${suma.toFixed(2)}€</p>
+                    </div>
+                    <p class="text-[9px] font-black text-emerald-600">✅ COINCIDE</p>
+                </div>`;
+        } else {
+            esValidoParaGuardar = false;
+            mensajeHtml = `
+                <div class="w-full flex items-center justify-between p-2.5 rounded-lg border bg-amber-50 border-amber-200">
+                    <div>
+                        <p class="text-[8px] font-bold uppercase text-amber-700">Soma Selecionada</p>
+                        <p class="text-xs font-black text-amber-600">${suma.toFixed(2)}€</p>
+                    </div>
+                    <p class="text-[9px] font-black text-amber-600">⚠️ DIFERENÇA: ${Math.abs(diff).toFixed(2)}€</p>
+                </div>`;
+        }
+    }
+
+    // Cambiar dinámicamente los estilos y propiedades del botón de guardar
     if (btnGravar) {
-        if (coinciden && window.documentosSeleccionados.length > 0) {
+        if (esValidoParaGuardar && window.documentosSeleccionados.length > 0) {
             btnGravar.classList.remove('opacity-50', 'cursor-not-allowed');
             btnGravar.classList.add('opacity-100', 'cursor-pointer');
         } else {
@@ -262,33 +325,36 @@ function actualizarIndicadorSuma(suma) {
         return; 
     }
 
-    contenedorSuma.innerHTML = `
-        <div class="w-full flex items-center justify-between p-2.5 rounded-lg border ${coinciden ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}">
-            <div>
-                <p class="text-[8px] font-bold uppercase ${coinciden ? 'text-emerald-700' : 'text-amber-700'}">Soma Selecionada</p>
-                <p class="text-xs font-black ${coinciden ? 'text-emerald-600' : 'text-amber-600'}">${suma.toFixed(2)}€</p>
-            </div>
-            <p class="text-[9px] font-black ${coinciden ? 'text-emerald-600' : 'text-amber-600'}">
-                ${coinciden ? '✅ COINCIDE' : '⚠️ DIFERENÇA: ' + diff.toFixed(2) + '€'}
-            </p>
-        </div>
-    `;
+    contenedorSuma.innerHTML = mensajeHtml;
     if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 window.intentarGuardar = function(id_interno) {
     const sumaTotalDocs = window.documentosSeleccionados.reduce((acc, doc) => acc + (parseFloat(doc.gross_total) || 0), 0);
-    const diff = Math.abs(Math.abs(window.montoLineaActual) - sumaTotalDocs);
-    const coinciden = diff < 0.01;
+    const valorBanco = Math.abs(window.montoLineaActual);
+    const diff = parseFloat((valorBanco - sumaTotalDocs).toFixed(2));
 
     if (window.documentosSeleccionados.length === 0) {
         window.showToast("Selecione pelo menos um documento.", "info");
         return;
     }
 
-    if (!coinciden) {
-        window.showToast("O valor total deve ser exactamente igual ao montante bancário.", "error");
-        return;
+    const esPayPal = window.movimientoBancarioSeleccionado && 
+                     window.movimientoBancarioSeleccionado.descricao && 
+                     window.movimientoBancarioSeleccionado.descricao.toUpperCase().includes("PAYPAL EUROPE");
+
+    if (esPayPal) {
+        // Bloqueo de seguridad definitivo en el guardado para PayPal
+        if (diff < 0 || diff > 5.00) {
+            window.showToast(`Erro: Para PayPal Europe, a diferença máxima permitida é de 5.00€. Diferença atual: ${diff.toFixed(2)}€`, "error");
+            return;
+        }
+    } else {
+        // Bloqueo de seguridad definitivo para el resto de bancos
+        if (Math.abs(diff) >= 0.01) {
+            window.showToast("O valor total deve ser exactamente igual ao montante bancário.", "error");
+            return;
+        }
     }
 
     window.guardarAsociacion(id_interno);
@@ -318,6 +384,7 @@ window.guardarAsociacion = async function(id_interno) {
 
 window.cancelarEdicion = function() {
     window.fechaFilaActual = ""; 
+    window.movimientoBancarioSeleccionado = null;
     const modal = document.getElementById('modal-conciliacion');
     const container = document.getElementById('form-container');
     
